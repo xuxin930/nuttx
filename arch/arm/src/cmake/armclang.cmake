@@ -1,5 +1,5 @@
 # ##############################################################################
-# arch/arm/src/cmake/gcc.cmake
+# arch/arm/src/cmake/armclang.cmake
 #
 # Licensed to the Apache Software Foundation (ASF) under one or more contributor
 # license agreements.  See the NOTICE file distributed with this work for
@@ -23,58 +23,42 @@
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
 
-set(TOOLCHAIN_PREFIX arm-none-eabi)
-set(CMAKE_LIBRARY_ARCHITECTURE ${TOOLCHAIN_PREFIX})
-set(CMAKE_C_COMPILER_TARGET ${TOOLCHAIN_PREFIX})
-set(CMAKE_CXX_COMPILER_TARGET ${TOOLCHAIN_PREFIX})
+set(CMAKE_ASM_COMPILER armclang)
+set(CMAKE_C_COMPILER armclang)
+set(CMAKE_CXX_COMPILER armclang)
+set(CMAKE_PREPROCESSOR armclang -E -P -x c)
+set(CMAKE_STRIP llvm-strip --strip-unneeded)
+set(CMAKE_OBJCOPY llvm-objcopy)
+set(CMAKE_OBJDUMP llvm-objdump)
+set(CMAKE_LINKER armlink)
+set(CMAKE_LD armlink)
+set(CMAKE_AR armar -rcs)
+set(CMAKE_NM llvm-nm)
+set(CMAKE_RANLIB llvm-ranlib)
 
-set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER})
-set(CMAKE_C_COMPILER ${TOOLCHAIN_PREFIX}-gcc)
-set(CMAKE_CXX_COMPILER ${TOOLCHAIN_PREFIX}-g++)
-set(CMAKE_PREPROCESSOR ${TOOLCHAIN_PREFIX}-gcc -E -P -x c)
-set(CMAKE_STRIP ${TOOLCHAIN_PREFIX}-strip --strip-unneeded)
-set(CMAKE_OBJCOPY ${TOOLCHAIN_PREFIX}-objcopy)
-set(CMAKE_OBJDUMP ${TOOLCHAIN_PREFIX}-objdump)
+# Since the no_builtin attribute is not fully supported on Clang disable the
+# built-in functions, refer: https://github.com/apache/nuttx/pull/5971
 
-if(NOT CONFIG_LTO_NONE AND CONFIG_ARM_TOOLCHAIN_GNU_EABI)
-  set(CMAKE_LINKER ${TOOLCHAIN_PREFIX}-gcc)
-  set(CMAKE_LD ${TOOLCHAIN_PREFIX}-gcc)
-  set(CMAKE_AR ${TOOLCHAIN_PREFIX}-gcc-ar)
-  set(CMAKE_NM ${TOOLCHAIN_PREFIX}-gcc-nm)
-  set(CMAKE_RANLIB ${TOOLCHAIN_PREFIX}-gcc-ranlib)
-  add_compile_options(-fno-builtin)
-else()
-  set(CMAKE_LINKER ${TOOLCHAIN_PREFIX}-ld)
-  set(CMAKE_LD ${TOOLCHAIN_PREFIX}-ld)
-  set(CMAKE_AR ${TOOLCHAIN_PREFIX}-ar)
-  set(CMAKE_NM ${TOOLCHAIN_PREFIX}-nm)
-  set(CMAKE_RANLIB ${TOOLCHAIN_PREFIX}-ranlib)
-endif()
+add_compile_options(-fno-builtin --target=arm-arm-none-eabi)
 
-set(NO_LTO "-fno-lto")
+# Suppress license warning
 
-if(CMAKE_C_COMPILER_VERSION VERSION_GREATER 4.9)
-  # force color for gcc > 4.9
-  add_compile_options(-fdiagnostics-color=always)
-endif()
+add_compile_options(-Wno-license-management)
+add_link_options(-Wl,--diag_suppress=9931)
+# Input sections are specified even though there will be no such sections found
+# in the libraries linked. Warning: L6314W: No section matches pattern *(xxx).
 
-# Workaround to skip -Warray-bounds check due to bug of GCC-12: Wrong warning
-# array subscript [0] is outside array bounds:
-# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105523
+add_link_options(-Wl,--diag_suppress=6314)
 
-execute_process(COMMAND ${CMAKE_C_COMPILER} --version
-                OUTPUT_VARIABLE GCC_VERSION_OUTPUT)
-string(REGEX MATCH "\\+\\+.* ([0-9]+)\\.[0-9]+" GCC_VERSION_REGEX
-             "${GCC_VERSION_OUTPUT}")
+# Allow Empty Execution region declared on scatter Warning: L6312W: Empty
+# Execution region description for region xxx
 
-set(GCCVER ${CMAKE_MATCH_1})
+add_link_options(-Wl,--diag_suppress=6312)
 
-if(GCCVER GREATER_EQUAL 12)
-  add_compile_options(--param=min-pagesize=0)
-  if(CONFIG_ARCH_RAMFUNCS)
-    add_link_options(-Wl,--no-warn-rwx-segments)
-  endif()
-endif()
+# Match pattern for an unused section that is being removed. Warning: L6329W:
+# Pattern xxx only matches removed unused sections.
+
+add_link_options(-Wl,--diag_suppress=6329)
 
 # override the ARCHIVE command
 
@@ -91,6 +75,8 @@ set(CMAKE_ASM_ARCHIVE_APPEND ${CMAKE_ARCHIVE_COMMAND})
 set(CMAKE_C_ARCHIVE_FINISH ${CMAKE_RANLIB_COMMAND})
 set(CMAKE_CXX_ARCHIVE_FINISH ${CMAKE_RANLIB_COMMAND})
 set(CMAKE_ASM_ARCHIVE_FINISH ${CMAKE_RANLIB_COMMAND})
+
+set(NO_LTO "-fno-lto")
 
 if(CONFIG_ENDIAN_BIG)
   add_compile_options(-mbig-endian)
@@ -168,10 +154,6 @@ if(CONFIG_ARCH_INSTRUMENT_ALL)
   add_compile_options(-finstrument-functions)
 endif()
 
-if(CONFIG_SCHED_GPROF_ALL)
-  add_compile_options(-pg)
-endif()
-
 if(CONFIG_UNWINDER_ARM)
   add_compile_options(-funwind-tables -fasynchronous-unwind-tables)
 endif()
@@ -182,7 +164,7 @@ if(CONFIG_LTO_THIN)
   add_compile_options(-flto=thin)
 elseif(CONFIG_LTO_FULL)
   add_compile_options(-flto)
-  add_compile_options(-fuse-linker-plugin)
+
 elseif(CONFIG_LTO_FAT)
   add_compile_options(-flto -ffat-lto-objects)
 endif()
@@ -192,11 +174,7 @@ endif()
 # compiled with flto
 
 if(NOT CONFIG_LTO_NONE)
-
-  # For gcc, use the linker plugin to extract objects with GIMPLE info from the
-  # lib archive
-
-  add_compile_options(-fuse-linker-plugin)
+  add_link_options(-Wl,--lto)
 endif()
 
 if(CONFIG_ARM_THUMB)
@@ -214,27 +192,24 @@ if(CONFIG_ARM_THUMB)
   add_compile_options(-Wa,-mimplicit-it=always)
 endif()
 
-# Optimization of unused sections
-
-if(CONFIG_DEBUG_OPT_UNUSED_SECTIONS)
-  add_link_options(-Wl,--gc-sections)
-  add_compile_options(-ffunction-sections -fdata-sections)
-endif()
-
-# Debug --whole-archive
-
-if(CONFIG_DEBUG_LINK_WHOLE_ARCHIVE)
-  add_link_options(-Wl,--whole-archive)
-endif()
-
 # Debug link map
 
 if(CONFIG_DEBUG_LINK_MAP)
-  add_link_options(-Wl,--cref -Wl,-Map=nuttx.map)
+  add_link_options(
+    -Wl,--strict
+    -Wl,--map
+    -Wl,--xref
+    -Wl,--symbols
+    -Wl,--info=unused
+    -Wl,--info=veneers
+    -Wl,--info=summarysizes
+    -Wl,--info=summarystack)
 endif()
 
 if(CONFIG_DEBUG_SYMBOLS)
   add_compile_options(${CONFIG_DEBUG_SYMBOLS_LEVEL})
+
+  add_link_options(-Wl,--debug)
 endif()
 
 add_compile_options(
